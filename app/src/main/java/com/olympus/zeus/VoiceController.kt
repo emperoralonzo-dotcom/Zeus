@@ -10,15 +10,24 @@ class VoiceController(context: Context) {
     private var ready = false
     var enabled = true
 
+    private var pendingPitch = 0.62f
+    private var pendingRate = 0.88f
+
     init {
         tts = TextToSpeech(context.applicationContext) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale.UK
-                tts?.setPitch(0.8f)
-                tts?.setSpeechRate(0.97f)
+                tts?.setPitch(pendingPitch)
+                tts?.setSpeechRate(pendingRate)
                 ready = true
             }
         }
+    }
+
+    /** Switch the voice to match the chosen god (deeper Zeus, brighter Hermes, etc.). */
+    fun setVoice(pitch: Float, rate: Float) {
+        pendingPitch = pitch; pendingRate = rate
+        if (ready) { tts?.setPitch(pitch); tts?.setSpeechRate(rate) }
     }
 
     fun speak(text: String) {
