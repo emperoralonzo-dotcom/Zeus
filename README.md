@@ -1,4 +1,4 @@
-# ⚡ FIXED BUILD v2 — models now actually installable (all six, no PC)
+# ⚡ FIXED BUILD v3 — adds the missing tasks-vision dependency (BitmapImageBuilder fix)
 
 **Why the download failed before:** two reasons. (1) The recommended Gemma models are
 license-gated on Hugging Face — a plain in-app download gets HTTP 401 and fails. (2) The old

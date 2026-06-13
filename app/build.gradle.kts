@@ -52,6 +52,9 @@ dependencies {
     // 0.10.24+ is required: LlmInferenceSession + image (vision) support live here.
     // (0.10.14 lacks the session/vision API this code uses — that's what broke the build.)
     implementation("com.google.mediapipe:tasks-genai:0.10.24")
+    // MPImage / BitmapImageBuilder (used to hand images to the model) live in the
+    // separate vision tasks library — without this line the build fails with
+    // "Unresolved reference: BitmapImageBuilder".
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
 
     // Networking only for the one-time optional model download.
