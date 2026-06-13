@@ -13,7 +13,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -83,6 +88,17 @@ class MainActivity : ComponentActivity() {
     private var installedSummary by mutableStateOf("")
     private var installedRoles by mutableStateOf(setOf<String>())
     private var installing by mutableStateOf(false)
+    private var persona by mutableStateOf("Zeus")
+    private var prophecy by mutableStateOf(false)
+
+    private fun channelGod(name: String) {
+        persona = name
+        val g = LlmEngine.GODS[name] ?: LlmEngine.GODS["Zeus"]!!
+        voice.setVoice(g.pitch, g.rate)
+        engine?.persona = name
+        messages.add(Msg(name, "You call upon ${g.name}, ${g.epithet}. I answer."))
+        if (voiceOn) voice.speak(messages.last().text)
+    }
 
     private val micPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -121,11 +137,11 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val reply = try {
                 withContext(Dispatchers.Default) {
-                    engine!!.also { it.internet = internet }.ask(t)
+                    engine!!.also { it.internet = internet; it.persona = persona; it.prophecy = prophecy }.ask(t)
                 }
             } catch (e: Throwable) { "A storm clouds my thoughts. Speak again." }
             thinking = false
-            messages.add(Msg("Zeus", reply))
+            messages.add(Msg(persona, reply))
             if (voiceOn) voice.speak(reply)
         }
     }
@@ -140,11 +156,11 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val reply = try {
                 withContext(Dispatchers.Default) {
-                    engine!!.also { it.internet = internet }.askImage("", bmp)
+                    engine!!.also { it.internet = internet; it.persona = persona; it.prophecy = prophecy }.askImage("", bmp)
                 }
             } catch (e: Throwable) { "My gaze cannot fix upon it just now." }
             thinking = false
-            messages.add(Msg("Zeus", reply))
+            messages.add(Msg(persona, reply))
             if (voiceOn) voice.speak(reply)
         }
     }
@@ -295,9 +311,17 @@ class MainActivity : ComponentActivity() {
         MaterialTheme(colorScheme = darkColorScheme(primary = Gold, background = Storm, surface = Panel)) {
             Box(Modifier.fillMaxSize().background(
                 Brush.verticalGradient(listOf(Color(0xFF0B1024), Storm, Color(0xFF0A0712))))) {
+                val showThrone = screen == "ready" || screen == "loading"
+                if (showThrone) {
+                    Image(painter = painterResource(R.drawable.throne), contentDescription = null,
+                        contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    // Dark scrim so chat text stays readable over the artwork.
+                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+                        listOf(Color(0xB30B1024), Color(0x800A0712), Color(0xF00A0712)))))
+                    LightningFlash()
+                }
                 Column(Modifier.fillMaxSize().statusBarsPadding()) {
                     Header()
-                    if (screen == "ready" || screen == "loading") Throne()
                     Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp)) {
                         when (screen) {
                             "checking", "loading" -> CenteredNote(
@@ -306,7 +330,7 @@ class MainActivity : ComponentActivity() {
                             "error" -> CenteredNote("A storm clouds my making:\n$errorText", isError = true)
                             "ready" -> LazyColumn(Modifier.fillMaxSize(), state = listState) {
                                 items(messages) { m -> Bubble(m) }
-                                if (thinking) item { Bubble(Msg("Zeus", "…")) }
+                                if (thinking) item { Bubble(Msg(persona, "…")) }
                             }
                         }
                     }
@@ -336,6 +360,17 @@ class MainActivity : ComponentActivity() {
                     text = { Text(if (internet) "Internet search: on" else "Internet search: off", color = TextMain) },
                     onClick = { internet = !internet })
                 DropdownMenuItem(
+                    text = { Text(if (prophecy) "Prophecy: on" else "Prophecy: off", color = TextMain) },
+                    onClick = { prophecy = !prophecy })
+                HorizontalDivider()
+                Text("  CHANNEL A GOD", color = Gold, fontSize = 10.sp, modifier = Modifier.padding(8.dp))
+                LlmEngine.GODS.forEach { (key, g) ->
+                    DropdownMenuItem(
+                        text = { Text("${g.name} · ${g.epithet}",
+                            color = if (key == persona) Gold else TextMain) },
+                        onClick = { menu = false; channelGod(key) })
+                }
+                DropdownMenuItem(
                     text = { Text("Add a mind (more models)", color = TextMain) },
                     onClick = { menu = false; refreshInstalledSummary(); addNote = ""; screen = "needModel" })
                 HorizontalDivider()
@@ -350,11 +385,16 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Throne() {
-        Box(Modifier.fillMaxWidth().height(250.dp), contentAlignment = Alignment.Center) {
-            Image(painter = painterResource(R.drawable.throne), contentDescription = "Zeus",
-                contentScale = ContentScale.Fit, modifier = Modifier.fillMaxHeight())
-        }
+    private fun LightningFlash() {
+        val transition = rememberInfiniteTransition(label = "lightning")
+        val alpha by transition.animateFloat(
+            initialValue = 0f, targetValue = 0f,
+            animationSpec = infiniteRepeatable(animation = keyframes {
+                durationMillis = 6500
+                0f at 0; 0f at 700; 0.55f at 780; 0.05f at 860; 0.65f at 920; 0f at 1120; 0f at 6500
+            }), label = "flash")
+        Box(Modifier.fillMaxSize().alpha(alpha).background(Brush.verticalGradient(
+            listOf(Color(0xFFCDA8FF), Color(0x33B98CFF), Color(0x00000000)))))
     }
 
     @Composable
