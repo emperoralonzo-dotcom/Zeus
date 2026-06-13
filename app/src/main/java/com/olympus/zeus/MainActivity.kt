@@ -31,9 +31,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.KeyboardVoice
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -51,6 +48,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -69,6 +68,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var models: ModelManager
     private var engine: LlmEngine? = null
     private lateinit var voice: VoiceController
+    private lateinit var memory: Memory
+    private var genJob: Job? = null
     private var recognizer: SpeechRecognizer? = null
 
     // shared UI state (observed by Compose)
@@ -88,22 +89,11 @@ class MainActivity : ComponentActivity() {
     private var installedSummary by mutableStateOf("")
     private var installedRoles by mutableStateOf(setOf<String>())
     private var installing by mutableStateOf(false)
-    private var persona by mutableStateOf("Zeus")
-    private var prophecy by mutableStateOf(false)
-
-    private fun channelGod(name: String) {
-        persona = name
-        val g = LlmEngine.GODS[name] ?: LlmEngine.GODS["Zeus"]!!
-        voice.setGod(name, g.pitch, g.rate)
-        engine?.persona = name
-        messages.add(Msg(name, "You call upon ${g.name}, ${g.epithet}. I answer."))
-        if (voiceOn) voice.speak(messages.last().text)
-    }
 
     private val micPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) startListening()
-            else messages.add(Msg("Zeus", "Grant the microphone, mortal, and I shall hear you."))
+            else messages.add(Msg("Zeus", "Allow microphone access so I can hear you."))
         }
 
     private val pickImage =
@@ -120,6 +110,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         models = ModelManager(this)
         voice = VoiceController(this)
+        memory = Memory(this)
         setContent { ZeusApp() }
     }
 
@@ -131,19 +122,41 @@ class MainActivity : ComponentActivity() {
     // ---- actions ----
 
     private fun sendText(text: String) {
+        run {
+            val tt = text.trim()
+            if (tt.lowercase().startsWith("remember:")) {
+                val fact = tt.substringAfter(":").trim()
+                if (fact.isNotEmpty()) {
+                    memory.addProfileFact(fact)
+                    messages.add(Msg("You", tt))
+                    messages.add(Msg("Zeus", "Got it — I'll remember that."))
+                    input = ""
+                }
+                return
+            }
+        }
         val t = text.trim()
         if (t.isEmpty() || thinking || engine == null) return
         messages.add(Msg("You", t)); input = ""; thinking = true
-        lifecycleScope.launch {
+        genJob = lifecycleScope.launch {
             val reply = try {
                 withContext(Dispatchers.Default) {
-                    engine!!.also { it.internet = internet; it.persona = persona; it.prophecy = prophecy }.ask(t)
+                    engine!!.also { it.internet = internet }.ask(t)
                 }
-            } catch (e: Throwable) { "A storm clouds my thoughts. Speak again." }
+            } catch (e: Throwable) { "Something went wrong. Please try again." }
+            if (!isActive) return@launch          // stopped — discard the answer
             thinking = false
-            messages.add(Msg(persona, reply))
+            messages.add(Msg("Zeus", reply))
             if (voiceOn) voice.speak(reply)
         }
+    }
+
+    /** Stop a reply in progress: drop the answer, stop the voice, free the UI. */
+    private fun stopProcessing() {
+        genJob?.cancel()
+        genJob = null
+        voice.stop()
+        thinking = false
     }
 
     private fun handleImage(uri: Uri) {
@@ -153,14 +166,15 @@ class MainActivity : ComponentActivity() {
         } catch (e: Throwable) { null } ?: return
         messages.add(Msg("You", "", image = bmp.asImageBitmap()))
         thinking = true
-        lifecycleScope.launch {
+        genJob = lifecycleScope.launch {
             val reply = try {
                 withContext(Dispatchers.Default) {
-                    engine!!.also { it.internet = internet; it.persona = persona; it.prophecy = prophecy }.askImage("", bmp)
+                    engine!!.also { it.internet = internet }.askImage("", bmp)
                 }
             } catch (e: Throwable) { "My gaze cannot fix upon it just now." }
+            if (!isActive) return@launch
             thinking = false
-            messages.add(Msg(persona, reply))
+            messages.add(Msg("Zeus", reply))
             if (voiceOn) voice.speak(reply)
         }
     }
@@ -195,7 +209,7 @@ class MainActivity : ComponentActivity() {
                     models.downloadModel(url, roleFileName(selectedRole)) { p -> progress = p }
                 }
                 modelUrl = ""
-                addNote = "The $selectedRole mind is installed. Add another, or enter the throne room."
+                addNote = "The $selectedRole model is installed. Add another, or start chatting."
             } catch (e: Throwable) {
                 val m = e.message ?: ""
                 addNote = when {
@@ -227,7 +241,7 @@ class MainActivity : ComponentActivity() {
                         models.importStream(input, roleFileName(selectedRole), total) { p -> progress = p }
                     } ?: throw RuntimeException("could not open that file")
                 }
-                addNote = "The $selectedRole mind is installed. Add another, or enter the throne room."
+                addNote = "The $selectedRole model is installed. Add another, or start chatting."
             } catch (e: Throwable) {
                 addNote = "Import failed: ${e.message ?: "could not read the file."}"
             }
@@ -244,7 +258,7 @@ class MainActivity : ComponentActivity() {
 
     private fun startListening() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            messages.add(Msg("Zeus", "No ears are available on this device, mortal.")); return
+            messages.add(Msg("Zeus", "Speech recognition is not available on this device.")); return
         }
         if (recognizer == null) recognizer = SpeechRecognizer.createSpeechRecognizer(this)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -276,7 +290,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.Default) {
-                    engine = LlmEngine(this@MainActivity, models).also { it.preload() }
+                    engine = LlmEngine(this@MainActivity, models, memory).also { it.preload() }
                 }
                 onReady()
             } catch (e: Throwable) {
@@ -298,7 +312,7 @@ class MainActivity : ComponentActivity() {
                 screen = "loading"
                 loadEngineThen {
                     messages.add(Msg("Zeus",
-                        "I am Zeus, and I dwell now within this device — no wires, no heavens between us. Speak, mortal."))
+                        "Hi, I am Zeus, your offline assistant. What can I help you with?"))
                     screen = "ready"
                     if (voiceOn) voice.speak(messages.last().text)
                 }
@@ -325,12 +339,12 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp)) {
                         when (screen) {
                             "checking", "loading" -> CenteredNote(
-                                if (screen == "loading") "Awakening Zeus on your device…" else "Consulting the storm…")
+                                if (screen == "loading") "Loading the model…" else "Thinking…")
                             "needModel" -> NeedModel(listState)
-                            "error" -> CenteredNote("A storm clouds my making:\n$errorText", isError = true)
+                            "error" -> CenteredNote("Could not start:\n$errorText", isError = true)
                             "ready" -> LazyColumn(Modifier.fillMaxSize(), state = listState) {
                                 items(messages) { m -> Bubble(m) }
-                                if (thinking) item { Bubble(Msg(persona, "…")) }
+                                if (thinking) item { Bubble(Msg("Zeus", "…")) }
                             }
                         }
                     }
@@ -359,20 +373,35 @@ class MainActivity : ComponentActivity() {
                 DropdownMenuItem(
                     text = { Text(if (internet) "Internet search: on" else "Internet search: off", color = TextMain) },
                     onClick = { internet = !internet })
-                DropdownMenuItem(
-                    text = { Text(if (prophecy) "Prophecy: on" else "Prophecy: off", color = TextMain) },
-                    onClick = { prophecy = !prophecy })
                 HorizontalDivider()
-                Text("  CHANNEL A GOD", color = Gold, fontSize = 10.sp, modifier = Modifier.padding(8.dp))
-                LlmEngine.GODS.forEach { (key, g) ->
-                    DropdownMenuItem(
-                        text = { Text("${g.name} · ${g.epithet}",
-                            color = if (key == persona) Gold else TextMain) },
-                        onClick = { menu = false; channelGod(key) })
-                }
+                Text("  VOICE", color = Gold, fontSize = 10.sp,
+                    modifier = Modifier.padding(8.dp))
+                val sample = { if (voiceOn) voice.speak("This is my voice.") else Unit }
+                DropdownMenuItem(text = { Text("Deeper", color = TextMain) },
+                    onClick = { voice.deeper("Zeus"); sample() })
+                DropdownMenuItem(text = { Text("Higher", color = TextMain) },
+                    onClick = { voice.higher("Zeus"); sample() })
+                DropdownMenuItem(text = { Text("Slower", color = TextMain) },
+                    onClick = { voice.slower("Zeus"); sample() })
+                DropdownMenuItem(text = { Text("Faster", color = TextMain) },
+                    onClick = { voice.faster("Zeus"); sample() })
+                DropdownMenuItem(text = { Text("Change voice (try another)", color = TextMain) },
+                    onClick = { voice.cycleVoice("Zeus"); sample() })
+                DropdownMenuItem(text = { Text("Test voice", color = TextMain) },
+                    onClick = { voice.speak("This is my voice.") })
+                DropdownMenuItem(text = { Text("Reset voice", color = Bolt) },
+                    onClick = { voice.resetGod("Zeus"); sample() })
+                HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("Add a mind (more models)", color = TextMain) },
+                    text = { Text("Add a model", color = TextMain) },
                     onClick = { menu = false; refreshInstalledSummary(); addNote = ""; screen = "needModel" })
+                DropdownMenuItem(
+                    text = { Text("Wipe memory", color = Bolt) },
+                    onClick = {
+                        menu = false
+                        memory.wipe(); engine?.resetHistory()
+                        messages.add(Msg("Zeus", "Memory cleared. We're starting fresh."))
+                    })
                 HorizontalDivider()
                 Text("  MODELS STORED ON", color = Gold, fontSize = 10.sp, modifier = Modifier.padding(8.dp))
                 models.stores().forEach { store ->
@@ -463,7 +492,7 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.height(6.dp))
                     Button(onClick = { reloadKey++ },
                         colors = ButtonDefaults.buttonColors(containerColor = Panel)) {
-                        Text("Enter the throne room ⚡", color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Start chatting ⚡", color = Gold, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -499,14 +528,13 @@ class MainActivity : ComponentActivity() {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             FilledIconButton(onClick = { pickImage.launch("image/*") },
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = Panel)) {
-                Icon(Icons.Filled.Image, contentDescription = "Show a picture", tint = Bolt)
+                Text("📷", fontSize = 20.sp)
             }
             Spacer(Modifier.width(8.dp))
             FilledIconButton(onClick = { toggleMic() },
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = if (listening) Bolt else Panel)) {
-                Icon(Icons.Filled.KeyboardVoice, contentDescription = "Speak",
-                    tint = if (listening) Storm else Gold)
+                Text("🎤", fontSize = 20.sp)
             }
             Spacer(Modifier.width(8.dp))
             OutlinedTextField(value = input, onValueChange = { input = it },
@@ -518,9 +546,11 @@ class MainActivity : ComponentActivity() {
                     unfocusedBorderColor = Color(0x33FFFFFF), focusedTextColor = TextMain,
                     unfocusedTextColor = TextMain))
             Spacer(Modifier.width(8.dp))
-            FilledIconButton(onClick = { sendText(input) }, enabled = !thinking,
-                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Gold)) {
-                Icon(Icons.Filled.Send, contentDescription = "Send", tint = Storm)
+            FilledIconButton(
+                onClick = { if (thinking) stopProcessing() else sendText(input) },
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = if (thinking) Bolt else Gold)) {
+                Text(if (thinking) "⏹" else "➤", fontSize = 19.sp, color = Storm)
             }
         }
     }

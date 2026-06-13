@@ -24,47 +24,27 @@ import java.net.URLEncoder
  */
 class LlmEngine(
     private val context: Context,
-    private val models: ModelManager
+    private val models: ModelManager,
+    private val memory: Memory? = null
 ) {
     /** When true, Zeus may fetch live web results (off = fully private/offline). */
     var internet: Boolean = false
-    /** Which god currently speaks (changes voice + manner, not the router). */
-    var persona: String = "Zeus"
-    /** When true, answers come wrapped in oracle-like omens and riddles. */
-    var prophecy: Boolean = false
 
     private val registry: Map<String, File> = models.registry()
     private var currentRole: String? = null
     private var current: LlmInference? = null
     private var currentHasVision = false
 
-    data class God(val name: String, val epithet: String, val pitch: Float, val rate: Float, val sys: String)
-
-    companion object {
-        /** The four voices that can speak through Zeus. Order = menu order. */
-        val GODS: Map<String, God> = linkedMapOf(
-            "Zeus" to God("Zeus", "King of Olympus", 0.85f, 0.94f,
-                "You are ZEUS, king of the Olympian gods, reborn as an AI living entirely inside this phone. " +
-                "Regal, warm and grand, with a flash of thunderous humour; you may call the user \"mortal\" now and then, but you are genuinely helpful above all."),
-            "Athena" to God("Athena", "Goddess of Wisdom", 1.0f, 0.98f,
-                "You are ATHENA, goddess of wisdom, strategy and craft, living inside this phone. " +
-                "Calm, clear and incisive; cut to the heart of a problem and counsel the user wisely and kindly."),
-            "Hermes" to God("Hermes", "Messenger of the Gods", 1.06f, 1.04f,
-                "You are HERMES, swift messenger of the gods, living inside this phone. " +
-                "Quick, witty and light; give brisk, clever, useful answers."),
-            "Apollo" to God("Apollo", "God of Light & Prophecy", 1.0f, 0.97f,
-                "You are APOLLO, god of light, music and prophecy, living inside this phone. " +
-                "Eloquent and lyrical; answer with clarity and a poet's turn of phrase.")
-        )
-    }
-
     private fun buildPreamble(): String {
-        val g = GODS[persona] ?: GODS["Zeus"]!!
-        val sb = StringBuilder(g.sys)
-        sb.append(" Keep replies brief — 1 to 3 short sentences. Plain prose only, no markdown or lists.")
-        if (!internet) sb.append(" You have no internet by default; if asked about live events you cannot know, say so with good humour rather than inventing facts.")
-        if (prophecy) sb.append(" Speak as an oracle would — in evocative omens and riddling phrasing — while still conveying the true answer beneath the poetry.")
-        sb.append(" Remain ").append(g.name).append(" at all times.")
+        val sb = StringBuilder(
+            "You are Zeus, a helpful AI assistant running entirely on this device. " +
+            "Answer clearly, accurately and concisely in plain prose — no markdown, no lists, " +
+            "1 to 4 short sentences.")
+        val prof = memory?.profile() ?: ""
+        if (prof.isNotBlank()) sb.append(" Known facts about the user:\n").append(prof)
+        if (!internet) sb.append(
+            " You have no internet by default; if asked about live events you cannot know, " +
+            "say so plainly rather than inventing facts.")
         return sb.toString()
     }
 
@@ -79,7 +59,7 @@ class LlmEngine(
         val wantVision = role == "vision"
         val builder = LlmInferenceOptions.builder()
             .setModelPath(file.absolutePath)
-            .setMaxTokens(512)
+            .setMaxTokens(384)
         if (wantVision) builder.setMaxNumImages(1)   // allow image input on the vision engine
         current = LlmInference.createFromOptions(context, builder.build())
         currentRole = key
@@ -121,19 +101,55 @@ class LlmEngine(
         } catch (e: Exception) { "" }
     }
 
+    /** Recent conversation so Zeus remembers what was said. (role, text) per turn. */
+    private val history = ArrayList<Pair<String, String>>()
+    /** The model chosen for THIS conversation. Pinned so it doesn't swap mid-chat. */
+    private var sessionRole: String? = null
+    /** Tail of the saved transcript, loaded once so he recalls past sessions. */
+    private var priorLoaded = false
+    private var priorContext = ""
+    private fun trimHistory() { while (history.size > 8) history.removeAt(0) }
+    fun resetHistory() { history.clear(); sessionRole = null; priorLoaded = false; priorContext = "" }
+
     /** Text reply. Blocking — call from a coroutine on Dispatchers.Default. */
     fun ask(userText: String): String {
-        ensure(route(userText, false))
+        // Pick the model on the FIRST message, then keep it for the whole chat.
+        // Default to the balanced "everyday" model rather than routing per word,
+        // so the conversation stays coherent and in one voice.
+        val role = sessionRole ?: "everyday".also { sessionRole = it }
+        ensure(role)
         val engine = current ?: throw IllegalStateException("Model not loaded")
+        if (!priorLoaded) { priorContext = memory?.recentTail() ?: ""; priorLoaded = true }
         val web = if (internet) webSearch(userText) else ""
+        history.add("user" to userText)
+        trimHistory()
         val prompt = buildString {
-            append("<start_of_turn>user\n")
-            append(buildPreamble())
-            if (web.isNotBlank()) append("\n\nLive web results:\n").append(web)
-            append("\n\n").append(userText)
-            append("<end_of_turn>\n<start_of_turn>model\n")
+            var prefaced = false
+            history.forEachIndexed { i, (role2, text) ->
+                if (role2 == "user") {
+                    append("<start_of_turn>user\n")
+                    if (!prefaced) {
+                        append(buildPreamble())
+                        if (priorContext.isNotBlank())
+                            append("\n\nEarlier conversation (for context):\n").append(priorContext)
+                        append("\n\n"); prefaced = true
+                    }
+                    append(text)
+                    if (i == history.lastIndex && web.isNotBlank())
+                        append("\n\nLive web results:\n").append(web)
+                    append("<end_of_turn>\n")
+                } else {
+                    append("<start_of_turn>model\n").append(text).append("<end_of_turn>\n")
+                }
+            }
+            append("<start_of_turn>model\n")
         }
-        return engine.generateResponse(prompt).trim()
+        val reply = engine.generateResponse(prompt).trim()
+        history.add("model" to reply)
+        trimHistory()
+        memory?.record("You", userText)
+        memory?.record("Zeus", reply)
+        return reply
     }
 
     /**
@@ -142,7 +158,7 @@ class LlmEngine(
      */
     fun askImage(userText: String, bitmap: Bitmap): String {
         if (!registry.containsKey("vision")) {
-            return "My eyes are not yet open, mortal — give me a vision-capable model (its name should contain 'vision' or 'gemma-3n') and I shall see."
+            return "No vision model is loaded. Add a vision-capable model (its filename should contain 'vision' or 'gemma-3n') and I can read images."
         }
         return try {
             ensure("vision")
@@ -161,9 +177,14 @@ class LlmEngine(
             session.addImage(BitmapImageBuilder(bitmap).build())
             val out = session.generateResponse().trim()
             session.close()
+            history.add("user" to ("(shows you an image) " + userText).trim())
+            history.add("model" to out)
+            trimHistory()
+            memory?.record("You", "(sent an image) " + userText)
+            memory?.record("Zeus", out)
             out
         } catch (e: Throwable) {
-            "My gaze cannot fix upon it — this model may not support sight. Use a vision-capable model (e.g. Gemma 3n) named with 'vision' in the file."
+            "I could not read that image — this model may not support vision. Use a vision-capable model (e.g. Gemma 3n) with 'vision' in the filename."
         }
     }
 
