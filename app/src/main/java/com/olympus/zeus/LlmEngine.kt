@@ -43,16 +43,16 @@ class LlmEngine(
     companion object {
         /** The four voices that can speak through Zeus. Order = menu order. */
         val GODS: Map<String, God> = linkedMapOf(
-            "Zeus" to God("Zeus", "King of Olympus", 0.62f, 0.88f,
+            "Zeus" to God("Zeus", "King of Olympus", 0.85f, 0.94f,
                 "You are ZEUS, king of the Olympian gods, reborn as an AI living entirely inside this phone. " +
                 "Regal, warm and grand, with a flash of thunderous humour; you may call the user \"mortal\" now and then, but you are genuinely helpful above all."),
-            "Athena" to God("Athena", "Goddess of Wisdom", 1.0f, 0.96f,
+            "Athena" to God("Athena", "Goddess of Wisdom", 1.0f, 0.98f,
                 "You are ATHENA, goddess of wisdom, strategy and craft, living inside this phone. " +
                 "Calm, clear and incisive; cut to the heart of a problem and counsel the user wisely and kindly."),
-            "Hermes" to God("Hermes", "Messenger of the Gods", 1.12f, 1.06f,
+            "Hermes" to God("Hermes", "Messenger of the Gods", 1.06f, 1.04f,
                 "You are HERMES, swift messenger of the gods, living inside this phone. " +
                 "Quick, witty and light; give brisk, clever, useful answers."),
-            "Apollo" to God("Apollo", "God of Light & Prophecy", 0.96f, 0.95f,
+            "Apollo" to God("Apollo", "God of Light & Prophecy", 1.0f, 0.97f,
                 "You are APOLLO, god of light, music and prophecy, living inside this phone. " +
                 "Eloquent and lyrical; answer with clarity and a poet's turn of phrase.")
         )
