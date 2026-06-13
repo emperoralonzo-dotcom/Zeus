@@ -94,7 +94,7 @@ class MainActivity : ComponentActivity() {
     private fun channelGod(name: String) {
         persona = name
         val g = LlmEngine.GODS[name] ?: LlmEngine.GODS["Zeus"]!!
-        voice.setVoice(g.pitch, g.rate)
+        voice.setGod(name, g.pitch, g.rate)
         engine?.persona = name
         messages.add(Msg(name, "You call upon ${g.name}, ${g.epithet}. I answer."))
         if (voiceOn) voice.speak(messages.last().text)
@@ -483,7 +483,7 @@ class MainActivity : ComponentActivity() {
             Column(Modifier.widthIn(max = 320.dp)
                 .background(if (mine) Color(0x22E8C36A) else Color(0x117FD8FF), RoundedCornerShape(14.dp))
                 .padding(12.dp)) {
-                if (!mine) Text("ZEUS", color = Gold, fontSize = 9.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
+                if (!mine) Text(m.who.uppercase(), color = Gold, fontSize = 9.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
                 if (m.image != null) {
                     Image(bitmap = m.image, contentDescription = null,
                         modifier = Modifier.widthIn(max = 200.dp), contentScale = ContentScale.Fit)
