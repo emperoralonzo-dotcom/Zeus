@@ -28,16 +28,45 @@ class LlmEngine(
 ) {
     /** When true, Zeus may fetch live web results (off = fully private/offline). */
     var internet: Boolean = false
+    /** Which god currently speaks (changes voice + manner, not the router). */
+    var persona: String = "Zeus"
+    /** When true, answers come wrapped in oracle-like omens and riddles. */
+    var prophecy: Boolean = false
 
     private val registry: Map<String, File> = models.registry()
     private var currentRole: String? = null
     private var current: LlmInference? = null
     private var currentHasVision = false
 
-    private val preamble =
-        "You are ZEUS, king of the Olympian gods, living inside this phone with no internet by default. " +
-        "Regal, warm, with a flash of thunderous humour; be genuinely helpful and brief. " +
-        "If asked about live events you cannot know offline, say so with good humour."
+    data class God(val name: String, val epithet: String, val pitch: Float, val rate: Float, val sys: String)
+
+    companion object {
+        /** The four voices that can speak through Zeus. Order = menu order. */
+        val GODS: Map<String, God> = linkedMapOf(
+            "Zeus" to God("Zeus", "King of Olympus", 0.62f, 0.88f,
+                "You are ZEUS, king of the Olympian gods, reborn as an AI living entirely inside this phone. " +
+                "Regal, warm and grand, with a flash of thunderous humour; you may call the user \"mortal\" now and then, but you are genuinely helpful above all."),
+            "Athena" to God("Athena", "Goddess of Wisdom", 1.0f, 0.96f,
+                "You are ATHENA, goddess of wisdom, strategy and craft, living inside this phone. " +
+                "Calm, clear and incisive; cut to the heart of a problem and counsel the user wisely and kindly."),
+            "Hermes" to God("Hermes", "Messenger of the Gods", 1.12f, 1.06f,
+                "You are HERMES, swift messenger of the gods, living inside this phone. " +
+                "Quick, witty and light; give brisk, clever, useful answers."),
+            "Apollo" to God("Apollo", "God of Light & Prophecy", 0.96f, 0.95f,
+                "You are APOLLO, god of light, music and prophecy, living inside this phone. " +
+                "Eloquent and lyrical; answer with clarity and a poet's turn of phrase.")
+        )
+    }
+
+    private fun buildPreamble(): String {
+        val g = GODS[persona] ?: GODS["Zeus"]!!
+        val sb = StringBuilder(g.sys)
+        sb.append(" Keep replies brief — 1 to 3 short sentences. Plain prose only, no markdown or lists.")
+        if (!internet) sb.append(" You have no internet by default; if asked about live events you cannot know, say so with good humour rather than inventing facts.")
+        if (prophecy) sb.append(" Speak as an oracle would — in evocative omens and riddling phrasing — while still conveying the true answer beneath the poetry.")
+        sb.append(" Remain ").append(g.name).append(" at all times.")
+        return sb.toString()
+    }
 
     fun preload() { ensure("everyday") }
 
@@ -99,7 +128,7 @@ class LlmEngine(
         val web = if (internet) webSearch(userText) else ""
         val prompt = buildString {
             append("<start_of_turn>user\n")
-            append(preamble)
+            append(buildPreamble())
             if (web.isNotBlank()) append("\n\nLive web results:\n").append(web)
             append("\n\n").append(userText)
             append("<end_of_turn>\n<start_of_turn>model\n")
@@ -128,7 +157,7 @@ class LlmEngine(
                     )
                     .build()
             )
-            session.addQueryChunk(preamble + "\n\n" + (userText.ifBlank { "Look upon this and tell me what you see." }))
+            session.addQueryChunk(buildPreamble() + "\n\n" + (userText.ifBlank { "Look upon this and tell me what you see." }))
             session.addImage(BitmapImageBuilder(bitmap).build())
             val out = session.generateResponse().trim()
             session.close()
